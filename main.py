@@ -167,9 +167,10 @@ def facebook_callback(current_user):
         'code': code
     }
     
-    response = requests.get(token_url, params=params)
-    if response.status_code != 200:
-        return jsonify({'error': 'Error al obtener token'}), 400
+response = requests.get(token_url, params=params)
+if response.status_code != 200:
+    print('Facebook error:', response.text)
+    return jsonify({'error': 'Error al obtener token', 'details': response.text}), 400
     
     token_data = response.json()
     access_token = token_data['access_token']
