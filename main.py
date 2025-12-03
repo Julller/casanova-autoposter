@@ -43,7 +43,7 @@ class User(db.Model):
 class SocialAccount(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    platform = db.Column(db.String(50), nullable=False)  # facebook, instagram
+    platform = db.Column(db.String(50), nullable=False)
     account_id = db.Column(db.String(100), nullable=False)
     account_name = db.Column(db.String(200))
     access_token = db.Column(db.Text, nullable=False)
@@ -58,9 +58,9 @@ class Post(db.Model):
     image_url = db.Column(db.String(500))
     link_url = db.Column(db.String(500))
     scheduled_time = db.Column(db.DateTime)
-    status = db.Column(db.String(20), default='draft')  # draft, scheduled, published, failed
-    platforms = db.Column(db.String(200))  # JSON: ["facebook", "instagram"]
-    published_ids = db.Column(db.Text)  # JSON: {"facebook": "post_id", "instagram": "post_id"}
+    status = db.Column(db.String(20), default='draft')
+    platforms = db.Column(db.String(200))
+    published_ids = db.Column(db.Text)
     error_message = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     published_at = db.Column(db.DateTime)
@@ -159,7 +159,6 @@ def get_facebook_auth_url(current_user):
 def facebook_callback(current_user):
     code = request.json.get('code')
     
-    # Intercambiar código por token
     token_url = f"https://graph.facebook.com/v18.0/oauth/access_token"
     params = {
         'client_id': FB_APP_ID,
@@ -175,7 +174,6 @@ def facebook_callback(current_user):
     token_data = response.json()
     access_token = token_data['access_token']
     
-    # Obtener token de larga duración
     long_token_url = f"https://graph.facebook.com/v18.0/oauth/access_token"
     long_params = {
         'grant_type': 'fb_exchange_token',
@@ -189,7 +187,6 @@ def facebook_callback(current_user):
         long_data = long_response.json()
         access_token = long_data.get('access_token', access_token)
     
-    # Obtener páginas del usuario
     pages_url = f"https://graph.facebook.com/v18.0/me/accounts?access_token={access_token}"
     pages_response = requests.get(pages_url)
     
@@ -200,7 +197,6 @@ def facebook_callback(current_user):
     added_accounts = []
     
     for page in pages:
-        # Guardar página de Facebook
         existing = SocialAccount.query.filter_by(
             user_id=current_user.id,
             platform='facebook',
@@ -222,7 +218,6 @@ def facebook_callback(current_user):
         
         added_accounts.append({'platform': 'facebook', 'name': page['name']})
         
-        # Buscar cuenta de Instagram vinculada
         ig_url = f"https://graph.facebook.com/v18.0/{page['id']}?fields=instagram_business_account&access_token={page['access_token']}"
         ig_response = requests.get(ig_url)
         
@@ -231,7 +226,6 @@ def facebook_callback(current_user):
             if 'instagram_business_account' in ig_data:
                 ig_id = ig_data['instagram_business_account']['id']
                 
-                # Obtener nombre de Instagram
                 ig_info_url = f"https://graph.facebook.com/v18.0/{ig_id}?fields=username&access_token={page['access_token']}"
                 ig_info = requests.get(ig_info_url).json()
                 ig_name = ig_info.get('username', 'Instagram')
@@ -380,7 +374,6 @@ def publish_post(current_user, post_id):
     return jsonify(result)
 
 def publish_to_social(post, user_id):
-    """Publicar en las redes sociales seleccionadas"""
     import json
     platforms = eval(post.platforms) if isinstance(post.platforms, str) else post.platforms
     published_ids = {}
@@ -431,7 +424,6 @@ def publish_to_social(post, user_id):
     }
 
 def publish_to_facebook(account, post):
-    """Publicar en página de Facebook"""
     url = f"https://graph.facebook.com/v18.0/{account.account_id}/feed"
     
     data = {
@@ -443,7 +435,6 @@ def publish_to_facebook(account, post):
         data['link'] = post.link_url
     
     if post.image_url and not post.link_url:
-        # Publicar como foto
         url = f"https://graph.facebook.com/v18.0/{account.account_id}/photos"
         data['url'] = post.image_url
         data['caption'] = post.content
@@ -453,11 +444,9 @@ def publish_to_facebook(account, post):
     return response.json()
 
 def publish_to_instagram(account, post):
-    """Publicar en Instagram Business"""
     if not post.image_url:
         return {'error': 'Instagram requiere una imagen'}
     
-    # Paso 1: Crear contenedor de medios
     container_url = f"https://graph.facebook.com/v18.0/{account.account_id}/media"
     container_data = {
         'image_url': post.image_url,
@@ -471,7 +460,6 @@ def publish_to_instagram(account, post):
     if 'id' not in container_result:
         return container_result
     
-    # Paso 2: Publicar el contenedor
     publish_url = f"https://graph.facebook.com/v18.0/{account.account_id}/media_publish"
     publish_data = {
         'creation_id': container_result['id'],
@@ -524,11 +512,9 @@ def delete_template(current_user, template_id):
 @app.route('/api/wordpress/import', methods=['POST'])
 @token_required
 def import_from_wordpress(current_user):
-    """Importar posts desde WordPress/WooCommerce"""
     data = request.json
     wp_url = data['url'].rstrip('/')
     
-    # Obtener posts recientes
     api_url = f"{wp_url}/wp-json/wp/v2/posts?per_page=10&_embed"
     
     try:
@@ -544,7 +530,6 @@ def import_from_wordpress(current_user):
             excerpt = wp_post['excerpt']['rendered'].replace('<p>', '').replace('</p>', '').strip()
             link = wp_post['link']
             
-            # Obtener imagen destacada
             image_url = None
             if '_embedded' in wp_post and 'wp:featuredmedia' in wp_post['_embedded']:
                 media = wp_post['_embedded']['wp:featuredmedia']
@@ -587,7 +572,6 @@ def get_stats(current_user):
 # ==================== SCHEDULER ====================
 
 def check_scheduled_posts():
-    """Verificar y publicar posts programados"""
     with app.app_context():
         now = datetime.utcnow()
         posts = Post.query.filter(
@@ -604,11 +588,14 @@ def check_scheduled_posts():
 def health_check():
     return jsonify({'status': 'ok', 'version': '1.0.0'})
 
+# Crear tablas al iniciar
+with app.app_context():
+    db.create_all()
+
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
     
-    # Iniciar scheduler
     scheduler.add_job(check_scheduled_posts, 'interval', minutes=1)
     scheduler.start()
     
