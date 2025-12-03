@@ -150,7 +150,7 @@ def get_me(current_user):
 @app.route('/api/social/facebook/auth-url', methods=['GET'])
 @token_required
 def get_facebook_auth_url(current_user):
-    scopes = 'pages_manage_posts,pages_read_engagement,instagram_basic,instagram_content_publish'
+    scopes = 'pages_manage_posts,pages_read_engagement'
     url = f"https://www.facebook.com/v18.0/dialog/oauth?client_id={FB_APP_ID}&redirect_uri={FB_REDIRECT_URI}&scope={scopes}&state={current_user.id}"
     return jsonify({'url': url})
 
