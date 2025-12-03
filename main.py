@@ -25,7 +25,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 # Facebook App Config
 FB_APP_ID = os.getenv('FB_APP_ID', '1536413')
 FB_APP_SECRET = os.getenv('FB_APP_SECRET', '')
-FB_REDIRECT_URI = os.getenv('FB_REDIRECT_URI', 'https://social.casanovastore.shop/callback')
+FB_REDIRECT_URI = os.getenv('FB_REDIRECT_URI', 'https://social.casanovastore.shop/callback.html')
 
 db = SQLAlchemy(app)
 scheduler = BackgroundScheduler()
@@ -159,6 +159,11 @@ def get_facebook_auth_url(current_user):
 def facebook_callback(current_user):
     code = request.json.get('code')
     
+    print(f"=== Facebook Callback ===")
+    print(f"Code received: {code[:50]}..." if code else "No code")
+    print(f"FB_APP_ID: {FB_APP_ID}")
+    print(f"FB_REDIRECT_URI: {FB_REDIRECT_URI}")
+    
     token_url = f"https://graph.facebook.com/v18.0/oauth/access_token"
     params = {
         'client_id': FB_APP_ID,
@@ -167,10 +172,12 @@ def facebook_callback(current_user):
         'code': code
     }
     
-response = requests.get(token_url, params=params)
-if response.status_code != 200:
-    print('Facebook error:', response.text)
-    return jsonify({'error': 'Error al obtener token', 'details': response.text}), 400
+    response = requests.get(token_url, params=params)
+    print(f"Token response status: {response.status_code}")
+    print(f"Token response: {response.text}")
+    
+    if response.status_code != 200:
+        return jsonify({'error': 'Error al obtener token', 'details': response.text}), 400
     
     token_data = response.json()
     access_token = token_data['access_token']
@@ -191,11 +198,16 @@ if response.status_code != 200:
     pages_url = f"https://graph.facebook.com/v18.0/me/accounts?access_token={access_token}"
     pages_response = requests.get(pages_url)
     
+    print(f"Pages response status: {pages_response.status_code}")
+    print(f"Pages response: {pages_response.text}")
+    
     if pages_response.status_code != 200:
-        return jsonify({'error': 'Error al obtener páginas'}), 400
+        return jsonify({'error': 'Error al obtener páginas', 'details': pages_response.text}), 400
     
     pages = pages_response.json().get('data', [])
     added_accounts = []
+    
+    print(f"Found {len(pages)} pages")
     
     for page in pages:
         existing = SocialAccount.query.filter_by(
@@ -253,6 +265,7 @@ if response.status_code != 200:
                 added_accounts.append({'platform': 'instagram', 'name': ig_name})
     
     db.session.commit()
+    print(f"Added accounts: {added_accounts}")
     return jsonify({'accounts': added_accounts})
 
 @app.route('/api/social/accounts', methods=['GET'])
