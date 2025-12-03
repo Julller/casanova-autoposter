@@ -488,14 +488,19 @@ def publish_to_facebook(account, post):
         'access_token': account.access_token
     }
     
-    if post.link_url:
-        data['link'] = post.link_url
-    
-    if post.image_url and not post.link_url:
+    # Si hay imagen, publicar como foto (priorizar imagen sobre link preview)
+    if post.image_url:
         url = f"https://graph.facebook.com/v18.0/{account.account_id}/photos"
         data['url'] = post.image_url
-        data['caption'] = post.content
+        # Si también hay link, agregarlo al mensaje
+        if post.link_url:
+            data['caption'] = f"{post.content}\n\n🔗 {post.link_url}"
+        else:
+            data['caption'] = post.content
         del data['message']
+    elif post.link_url:
+        # Solo link sin imagen personalizada
+        data['link'] = post.link_url
     
     response = requests.post(url, data=data)
     return response.json()
