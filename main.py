@@ -23,7 +23,7 @@ app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///aut
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # Facebook App Config
-FB_APP_ID = os.getenv('FB_APP_ID', '1536413')
+FB_APP_ID = os.getenv('FB_APP_ID', '1127681912914109')
 FB_APP_SECRET = os.getenv('FB_APP_SECRET', '')
 FB_REDIRECT_URI = os.getenv('FB_REDIRECT_URI', 'https://social.casanovastore.shop/callback.html')
 
@@ -268,6 +268,49 @@ def facebook_callback(current_user):
     print(f"Added accounts: {added_accounts}")
     return jsonify({'accounts': added_accounts})
 
+# ==================== AGREGAR CUENTA MANUAL ====================
+
+@app.route('/api/social/accounts/add', methods=['POST'])
+@token_required
+def add_account_manual(current_user):
+    """Agregar cuenta manualmente con token"""
+    data = request.json
+    
+    platform = data.get('platform', 'facebook')
+    account_id = data.get('account_id')
+    account_name = data.get('account_name')
+    access_token = data.get('access_token')
+    
+    if not account_id or not access_token:
+        return jsonify({'error': 'account_id y access_token son requeridos'}), 400
+    
+    # Verificar si ya existe
+    existing = SocialAccount.query.filter_by(
+        user_id=current_user.id,
+        platform=platform,
+        account_id=account_id
+    ).first()
+    
+    if existing:
+        existing.access_token = access_token
+        existing.account_name = account_name
+        existing.is_active = True
+        db.session.commit()
+        return jsonify({'message': 'Cuenta actualizada', 'id': existing.id})
+    
+    # Crear nueva cuenta
+    account = SocialAccount(
+        user_id=current_user.id,
+        platform=platform,
+        account_id=account_id,
+        account_name=account_name,
+        access_token=access_token
+    )
+    db.session.add(account)
+    db.session.commit()
+    
+    return jsonify({'message': 'Cuenta agregada', 'id': account.id})
+
 @app.route('/api/social/accounts', methods=['GET'])
 @token_required
 def get_accounts(current_user):
@@ -415,7 +458,7 @@ def publish_to_social(post, user_id):
             if result.get('id'):
                 published_ids[platform] = result['id']
             else:
-                errors.append(f"{platform}: {result.get('error', 'Error desconocido')}")
+                errors.append(f"{platform}: {result.get('error', {}).get('message', 'Error desconocido')}")
         except Exception as e:
             errors.append(f"{platform}: {str(e)}")
     
