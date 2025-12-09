@@ -12,6 +12,11 @@ import requests
 import os
 import jwt
 import hashlib
+import hmac
+import base64
+import urllib.parse
+import time
+import uuid
 from apscheduler.schedulers.background import BackgroundScheduler
 
 app = Flask(__name__)
@@ -274,6 +279,8 @@ def facebook_callback(current_user):
 @token_required
 def add_account_manual(current_user):
     """Agregar cuenta manualmente con token"""
+    import json as json_lib
+    
     data = request.json
     
     platform = data.get('platform', 'facebook')
@@ -281,8 +288,18 @@ def add_account_manual(current_user):
     account_name = data.get('account_name')
     access_token = data.get('access_token')
     
-    if not account_id or not access_token:
-        return jsonify({'error': 'account_id y access_token son requeridos'}), 400
+    # Para Twitter, guardar todas las credenciales como JSON
+    if platform == 'twitter':
+        twitter_creds = {
+            'api_key': data.get('api_key'),
+            'api_secret': data.get('api_secret'),
+            'access_token': data.get('access_token'),
+            'access_token_secret': data.get('access_token_secret')
+        }
+        access_token = json_lib.dumps(twitter_creds)
+    
+    if not account_id:
+        return jsonify({'error': 'account_id es requerido'}), 400
     
     # Verificar si ya existe
     existing = SocialAccount.query.filter_by(
@@ -452,6 +469,8 @@ def publish_to_social(post, user_id):
                 result = publish_to_facebook(account, post)
             elif platform == 'instagram':
                 result = publish_to_instagram(account, post)
+            elif platform == 'twitter':
+                result = publish_to_twitter(account, post)
             else:
                 continue
             
@@ -507,7 +526,7 @@ def publish_to_facebook(account, post):
 
 def publish_to_instagram(account, post):
     if not post.image_url:
-        return {'error': 'Instagram requiere una imagen'}
+        return {'error': {'message': 'Instagram requiere una imagen'}}
     
     container_url = f"https://graph.facebook.com/v18.0/{account.account_id}/media"
     container_data = {
@@ -530,6 +549,79 @@ def publish_to_instagram(account, post):
     
     publish_response = requests.post(publish_url, data=publish_data)
     return publish_response.json()
+
+def publish_to_twitter(account, post):
+    """Publicar en Twitter/X usando OAuth 1.0a"""
+    import json as json_lib
+    
+    # Obtener credenciales almacenadas
+    try:
+        # Las credenciales se guardan en access_token como JSON
+        creds = json_lib.loads(account.access_token)
+        api_key = creds.get('api_key')
+        api_secret = creds.get('api_secret')
+        access_token = creds.get('access_token')
+        access_token_secret = creds.get('access_token_secret')
+    except:
+        return {'error': {'message': 'Credenciales de Twitter inválidas'}}
+    
+    if not all([api_key, api_secret, access_token, access_token_secret]):
+        return {'error': {'message': 'Faltan credenciales de Twitter'}}
+    
+    # Preparar el tweet
+    tweet_text = post.content
+    if post.link_url:
+        tweet_text = f"{post.content}\n\n{post.link_url}"
+    
+    # Limitar a 280 caracteres
+    if len(tweet_text) > 280:
+        tweet_text = tweet_text[:277] + "..."
+    
+    # URL de la API de Twitter v2
+    url = "https://api.twitter.com/2/tweets"
+    
+    # Crear firma OAuth 1.0a
+    oauth_params = {
+        'oauth_consumer_key': api_key,
+        'oauth_token': access_token,
+        'oauth_signature_method': 'HMAC-SHA1',
+        'oauth_timestamp': str(int(time.time())),
+        'oauth_nonce': str(uuid.uuid4().hex),
+        'oauth_version': '1.0'
+    }
+    
+    # Crear la firma
+    param_string = '&'.join([f"{k}={urllib.parse.quote(str(v), safe='')}" for k, v in sorted(oauth_params.items())])
+    base_string = f"POST&{urllib.parse.quote(url, safe='')}&{urllib.parse.quote(param_string, safe='')}"
+    signing_key = f"{urllib.parse.quote(api_secret, safe='')}&{urllib.parse.quote(access_token_secret, safe='')}"
+    
+    signature = base64.b64encode(
+        hmac.new(signing_key.encode(), base_string.encode(), hashlib.sha1).digest()
+    ).decode()
+    
+    oauth_params['oauth_signature'] = signature
+    
+    # Crear header de autorización
+    auth_header = 'OAuth ' + ', '.join([f'{k}="{urllib.parse.quote(str(v), safe="")}"' for k, v in sorted(oauth_params.items())])
+    
+    headers = {
+        'Authorization': auth_header,
+        'Content-Type': 'application/json'
+    }
+    
+    payload = {'text': tweet_text}
+    
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        result = response.json()
+        
+        if 'data' in result and 'id' in result['data']:
+            return {'id': result['data']['id']}
+        else:
+            error_msg = result.get('detail') or result.get('title') or str(result)
+            return {'error': {'message': error_msg}}
+    except Exception as e:
+        return {'error': {'message': str(e)}}
 
 # ==================== PLANTILLAS ====================
 
@@ -648,7 +740,7 @@ def check_scheduled_posts():
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    return jsonify({'status': 'ok', 'version': '1.0.0'})
+    return jsonify({'status': 'ok', 'version': '1.1.0'})
 
 # Crear tablas al iniciar
 with app.app_context():
