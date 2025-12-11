@@ -453,102 +453,195 @@ def publish_to_social(post, user_id):
     published_ids = {}
     errors = []
     
+    print(f"=== INICIANDO PUBLICACIÓN ===")
+    print(f"Post ID: {post.id}")
+    print(f"Contenido: {post.content[:100]}...")
+    print(f"Plataformas: {platforms}")
+    print(f"User ID: {user_id}")
+    
     for platform in platforms:
+        print(f"\n--- Procesando {platform} ---")
+        
+        # Para threads, usar la misma cuenta que instagram
+        query_platform = 'instagram' if platform == 'threads' else platform
+        
         account = SocialAccount.query.filter_by(
             user_id=user_id,
-            platform=platform,
+            platform=query_platform,
             is_active=True
         ).first()
         
         if not account:
-            errors.append(f"No hay cuenta de {platform} conectada")
+            error_msg = f"No hay cuenta de {platform} conectada"
+            errors.append(error_msg)
+            print(f"ERROR: {error_msg}")
             continue
         
+        print(f"Cuenta encontrada: {account.account_name} ({account.account_id})")
+        
         try:
+            result = None
             if platform == 'facebook':
                 result = publish_to_facebook(account, post)
-            elif platform == 'instagram':
+            elif platform == 'instagram' or platform == 'threads':
                 result = publish_to_instagram(account, post)
             elif platform == 'twitter':
                 result = publish_to_twitter(account, post)
             else:
+                error_msg = f"Plataforma no soportada: {platform}"
+                errors.append(error_msg)
+                print(f"ERROR: {error_msg}")
                 continue
             
-            if result.get('id'):
-                published_ids[platform] = result['id']
+            print(f"Resultado de {platform}: {result}")
+            
+            if result and isinstance(result, dict):
+                if 'id' in result:
+                    published_ids[platform] = result['id']
+                    print(f"✓ Publicado exitosamente en {platform}")
+                elif 'error' in result:
+                    error_msg = f"{platform}: {result['error'].get('message', str(result['error']))}"
+                    errors.append(error_msg)
+                    print(f"✗ Error en {platform}: {error_msg}")
+                else:
+                    error_msg = f"{platform}: Respuesta inesperada: {result}"
+                    errors.append(error_msg)
+                    print(f"✗ Respuesta inesperada en {platform}")
             else:
-                errors.append(f"{platform}: {result.get('error', {}).get('message', 'Error desconocido')}")
+                error_msg = f"{platform}: Resultado inválido: {result}"
+                errors.append(error_msg)
+                print(f"✗ Resultado inválido en {platform}")
+                
         except Exception as e:
-            errors.append(f"{platform}: {str(e)}")
+            error_msg = f"{platform}: Exception - {str(e)}"
+            errors.append(error_msg)
+            print(f"✗ Exception en {platform}: {str(e)}")
+            import traceback
+            print(f"Traceback: {traceback.format_exc()}")
+    
+    # Actualizar estado del post
+    print(f"\n=== RESULTADOS FINALES ===")
+    print(f"Publicados: {published_ids}")
+    print(f"Errores: {errors}")
     
     if published_ids:
         post.status = 'published'
         post.published_ids = json.dumps(published_ids)
         post.published_at = datetime.utcnow()
+        print("✓ Post marcado como publicado")
+    else:
+        post.status = 'failed'
+        print("✗ Post marcado como fallido")
     
     if errors:
         post.error_message = '; '.join(errors)
-        if not published_ids:
-            post.status = 'failed'
+        print(f"Errores guardados: {post.error_message}")
     
-    db.session.commit()
+    try:
+        db.session.commit()
+        print("✓ Cambios guardados en base de datos")
+    except Exception as e:
+        print(f"✗ Error guardando en DB: {e}")
     
-    return {
+    final_result = {
         'success': len(published_ids) > 0,
         'published': published_ids,
         'errors': errors
     }
+    
+    print(f"Resultado final: {final_result}")
+    print("=== FIN PUBLICACIÓN ===\n")
+    
+    return final_result
 
 def publish_to_facebook(account, post):
-    url = f"https://graph.facebook.com/v18.0/{account.account_id}/feed"
-    
-    data = {
-        'message': post.content,
-        'access_token': account.access_token
-    }
-    
-    # Si hay imagen, publicar como foto (priorizar imagen sobre link preview)
-    if post.image_url:
-        url = f"https://graph.facebook.com/v18.0/{account.account_id}/photos"
-        data['url'] = post.image_url
-        # Si también hay link, agregarlo al mensaje
-        if post.link_url:
-            data['caption'] = f"{post.content}\n\n🔗 {post.link_url}"
+    try:
+        url = f"https://graph.facebook.com/v18.0/{account.account_id}/feed"
+        
+        data = {
+            'message': post.content,
+            'access_token': account.access_token
+        }
+        
+        # Si hay imagen, publicar como foto
+        if post.image_url:
+            url = f"https://graph.facebook.com/v18.0/{account.account_id}/photos"
+            data['url'] = post.image_url
+            # Si también hay link, agregarlo al caption
+            if post.link_url:
+                data['caption'] = f"{post.content}\n\n🔗 {post.link_url}"
+            else:
+                data['caption'] = post.content
+            if 'message' in data:
+                del data['message']
+        elif post.link_url:
+            # Solo link sin imagen personalizada
+            data['link'] = post.link_url
+        
+        print(f"Facebook request: {url}")
+        print(f"Facebook data: {data}")
+        
+        response = requests.post(url, data=data, timeout=30)
+        result = response.json()
+        
+        print(f"Facebook response: {response.status_code} - {result}")
+        
+        if response.status_code == 200 and 'id' in result:
+            return {'id': result['id']}
         else:
-            data['caption'] = post.content
-        del data['message']
-    elif post.link_url:
-        # Solo link sin imagen personalizada
-        data['link'] = post.link_url
-    
-    response = requests.post(url, data=data)
-    return response.json()
+            return {'error': {'message': str(result)}}
+            
+    except Exception as e:
+        print(f"Facebook exception: {str(e)}")
+        return {'error': {'message': str(e)}}
 
 def publish_to_instagram(account, post):
-    if not post.image_url:
-        return {'error': {'message': 'Instagram requiere una imagen'}}
-    
-    container_url = f"https://graph.facebook.com/v18.0/{account.account_id}/media"
-    container_data = {
-        'image_url': post.image_url,
-        'caption': post.content,
-        'access_token': account.access_token
-    }
-    
-    container_response = requests.post(container_url, data=container_data)
-    container_result = container_response.json()
-    
-    if 'id' not in container_result:
-        return container_result
-    
-    publish_url = f"https://graph.facebook.com/v18.0/{account.account_id}/media_publish"
-    publish_data = {
-        'creation_id': container_result['id'],
-        'access_token': account.access_token
-    }
-    
-    publish_response = requests.post(publish_url, data=publish_data)
-    return publish_response.json()
+    try:
+        if not post.image_url:
+            return {'error': {'message': 'Instagram requiere una imagen'}}
+        
+        # Paso 1: Crear contenedor de medios
+        container_url = f"https://graph.facebook.com/v18.0/{account.account_id}/media"
+        container_data = {
+            'image_url': post.image_url,
+            'caption': post.content,
+            'access_token': account.access_token
+        }
+        
+        print(f"Instagram container request: {container_url}")
+        print(f"Instagram container data: {container_data}")
+        
+        container_response = requests.post(container_url, data=container_data, timeout=30)
+        container_result = container_response.json()
+        
+        print(f"Instagram container response: {container_response.status_code} - {container_result}")
+        
+        if 'id' not in container_result:
+            return {'error': {'message': f'Error creando contenedor: {str(container_result)}'}}
+        
+        # Paso 2: Publicar el contenedor
+        publish_url = f"https://graph.facebook.com/v18.0/{account.account_id}/media_publish"
+        publish_data = {
+            'creation_id': container_result['id'],
+            'access_token': account.access_token
+        }
+        
+        print(f"Instagram publish request: {publish_url}")
+        print(f"Instagram publish data: {publish_data}")
+        
+        publish_response = requests.post(publish_url, data=publish_data, timeout=30)
+        publish_result = publish_response.json()
+        
+        print(f"Instagram publish response: {publish_response.status_code} - {publish_result}")
+        
+        if publish_response.status_code == 200 and 'id' in publish_result:
+            return {'id': publish_result['id']}
+        else:
+            return {'error': {'message': f'Error publicando: {str(publish_result)}'}}
+            
+    except Exception as e:
+        print(f"Instagram exception: {str(e)}")
+        return {'error': {'message': str(e)}}
 
 def publish_to_twitter(account, post):
     """Publicar en Twitter/X usando OAuth 1.0a"""
